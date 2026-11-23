@@ -98,6 +98,8 @@ root.geometry(f"{bw}x{bh}+80+80")
 img = tk.PhotoImage(file=bus_png)
 label = tk.Label(root, image=img, borderwidth=0, highlightthickness=0)
 label.pack()
+clicks_received: list[tuple[int, int]] = []
+label.bind("<Button-1>", lambda e: clicks_received.append((e.x_root, e.y_root)))
 root.update()
 time.sleep(0.8)
 root.update()
@@ -141,9 +143,25 @@ try:
     r = auto.region("bus", area)
     check("auto.region('bus') returns a box", isinstance(r, Region), str(r))
 
-    # --- resolving a word to a click point WITHOUT clicking ------------- #
+    # --- resolving a word to a click point AND actually clicking it ------ #
     pt = auto._as_point("bus", within=area)
     check("word resolves to a screen point", pt == d.center, f"{pt}")
+
+    origin_cursor = auto.cursor
+    win.activate()
+    root.update()
+    auto.click("bus", within=area)
+    for _ in range(10):
+        root.update()
+        time.sleep(0.02)
+    auto.mouse.move(origin_cursor.x, origin_cursor.y)
+    check("auto.click('bus') delivered a click to the window",
+          len(clicks_received) >= 1, str(clicks_received))
+    if clicks_received and r:
+        cx, cy = clicks_received[-1]
+        in_bus = (r.x <= cx <= r.x + r.width and r.y <= cy <= r.y + r.height)
+        check("received click landed inside the bus bounding box", in_bus,
+              f"click=({cx},{cy}) box={tuple(r)}")
 
     # --- NotFound is raised, not silently mis-clicked ------------------- #
     from basira import NotFound

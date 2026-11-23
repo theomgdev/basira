@@ -17,8 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
 
-from yoloe26 import CAREFUL, NATURAL, Point, Region, auto, probe_window_dc
-from yoloe26 import _win32 as _w
+from basira import CAREFUL, NATURAL, Point, Region, auto, probe_window_dc
+from basira import _win32 as _w
 
 PASS, FAIL = [], []
 
@@ -83,7 +83,7 @@ check("1000 queries cheaper than 1 frame grab", q < env["refresh_ms"],
 # --------------------------------------------------------------------------- #
 head("2. FRAME QUERY CORRECTNESS (vs a known synthetic pattern)")
 # Build a frame from a known array to verify search math exactly.
-from yoloe26.screen import Frame
+from basira.screen import Frame
 
 art = np.zeros((40, 60, 4), np.uint8)
 art[10:20, 30:45, 2] = 255          # a red block, R in BGRA index 2
@@ -138,13 +138,13 @@ check("seeded profile is reproducible",
 check("different seeds differ",
       NATURAL.seeded(1).path(0, 0, 400, 400) != NATURAL.seeded(2).path(0, 0, 400, 400))
 inst = auto.profile.__class__  # INSTANT has no path
-from yoloe26 import INSTANT
+from basira import INSTANT
 check("INSTANT profile emits no curve", INSTANT.steps_per_100px == 0)
 
 # --------------------------------------------------------------------------- #
 head("4. BATCHING CLAIM: is organic motion really cheaper than naive per-event?")
-from yoloe26 import _win32 as _w
-from yoloe26.mouse import _mouse_event, _norm_abs, _send
+from basira import _win32 as _w
+from basira.mouse import _mouse_event, _norm_abs, _send
 
 pts = NATURAL.seeded(3).path(500, 500, 1400, 900)
 flags = _w.MOUSEEVENTF_MOVE | _w.MOUSEEVENTF_ABSOLUTE | _w.MOUSEEVENTF_VIRTUALDESK
@@ -300,7 +300,7 @@ try:
         auto.press("ctrl", "a")
         auto.tap("delete")
         auto.wait(0.2)
-        from yoloe26 import clipboard
+        from basira import clipboard
         clipboard.clear()
         auto.press("ctrl", "a")
         clip4 = auto.copy().strip()

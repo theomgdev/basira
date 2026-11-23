@@ -139,7 +139,8 @@ Live measurements on **Windows 11, RTX 3060 Ti, 3440x1440 @ 144 Hz, Python 3.11/
 | Pixel query from a frame | **0.44 us** | vectorised uint32 compare in RAM |
 | Screen read, bounded region | **6.94 ms** | = `DwmFlush()` = 1/144 s — the compositor sets this, not us |
 | Full-screen grab (5 MPx) | **29-34 ms** | max(vsync, 5 MB DIB copy) |
-| Unicode typing | **5 ms/char** | TSF needs >=4 ms between `VK_PACKET` events or it drops them |
+| Unicode typing | **6 ms/char** | TSF needs >=6 ms under load or CJK codepoints merge |
+| Open-vocabulary detection (`yoloe-26s-seg`) | **35 ms p50** | warm GPU forward pass; **1.2 us** on a cached frame |
 
 Three findings worth stating plainly, because they shaped the architecture:
 

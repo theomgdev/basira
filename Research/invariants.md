@@ -31,7 +31,13 @@ Host: Windows 11 (AMD/RTX 3060 Ti, 3440x1440 @ 144 Hz, Python 3.11)
 
 - **Observation**: Emitting multiple `KEYEVENTF_UNICODE` characters with zero delay ($<2\text{ ms}$) into modern Windows 11 controls (XAML Notepad, Electron, RichEdit) causes character dropping, character merging, and tail repetition (e.g. `'YOLOE26 ok'` becoming `'YOLOE26 kk'`).
 - **Root Cause**: Windows TSF dispatches `VK_PACKET` events into `WM_IME_COMPOSITION` / `WM_CHAR` streams. If down/up events land within the same message queue slice, the composition buffer fails to commit previous codepoints before the next arrives.
-- **Rule**: Minimum delay between consecutive Unicode characters must be $\mathbf{\ge 4-5\text{ ms}}$. At 5 ms, typing throughput is 200 characters per second with 100% fidelity across all Unicode planes.
+- **Rule**: Minimum delay between consecutive Unicode characters must be $\mathbf{\ge 6\text{ ms}}$. The theoretical floor is $\sim 4\text{ ms}$, and $5\text{ ms}$ passed on an idle machine, but under load `'日本語'` collapsed to `'本本語'` at $5\text{ ms}$ while $6\text{ ms}$ held across repeated runs. At 6 ms, typing throughput is 166 characters per second with 100% fidelity across all Unicode planes.
+
+## 5. WM_MOUSEMOVE Coalescing During Drag
+
+- **Observation**: `SendInput` of 8 `MOUSEEVENTF_MOVE` events in one call while the left button was held delivered **one** `WM_MOUSEMOVE` to the target window (verified by a Tk canvas binding `<B1-Motion>` and counting the callbacks: 9 total instead of the expected 20+).
+- **Root Cause**: Windows coalesces pending `WM_MOUSEMOVE` messages in the thread queue (`QS_MOUSEMOVE`) between message-pump iterations. Button-down/up and keyboard events are NOT coalesced, which is why batching is free for clicks and keystrokes but destructive for drag strokes.
+- **Rule**: While a mouse button is held, each waypoint must be followed by a brief yield ($\sim 1.5\text{ ms}$) so the target thread pumps the message before the next arrives. When the button is up, batching at 8 events remains the measured optimum because nobody is listening to the intermediate points.
 
 ## 5. 64-bit Ctypes Handle Truncation
 

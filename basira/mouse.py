@@ -229,27 +229,37 @@ class Mouse:
         return self.click(x, y, button=button, count=2, humanize=humanize)
 
     def drag(self, x0: int, y0: int, x1: int, y1: int, *,
-             button: str = "left", humanize=None):
-        """Press, travel, release. The travel is a real path even in instant
-        mode, because many UIs ignore a drag that teleports: they need
-        intermediate move messages to start their drag state machine."""
+             button: str = "left", steps: int = 12, humanize=None):
+        """Press, travel, release.
+
+        Measured trap: Windows coalesces queued WM_MOUSEMOVE messages between
+        application message-pump ticks. Pushing 8 move events in one SendInput
+        call delivers ONE WM_MOUSEMOVE to the window (the last point), so a
+        canvas or drag-and-drop handler sees a teleport instead of a stroke.
+        While a button is held, each waypoint must therefore be followed by a
+        brief yield so the target thread pumps it before the next arrives.
+        """
         p = self.profile if humanize is None else _h.resolve(humanize)
+        flags = (_w.MOUSEEVENTF_MOVE | _w.MOUSEEVENTF_ABSOLUTE
+                 | _w.MOUSEEVENTF_VIRTUALDESK)
         self.move(x0, y0, humanize=humanize)
         self.down(button)
         try:
             if p is _h.INSTANT:
-                # minimum viable path: a handful of samples so the target's
-                # drag handler actually fires
-                flags = (_w.MOUSEEVENTF_MOVE | _w.MOUSEEVENTF_ABSOLUTE
-                         | _w.MOUSEEVENTF_VIRTUALDESK)
-                evs = []
-                for i in range(1, 9):
-                    t = i / 8
-                    nx, ny = _norm_abs(int(x0 + (x1 - x0) * t), int(y0 + (y1 - y0) * t))
-                    evs.append(_mouse_event(flags, nx, ny))
-                _send(evs)
+                pts = [(int(round(x0 + (x1 - x0) * (i / steps))),
+                        int(round(y0 + (y1 - y0) * (i / steps))))
+                       for i in range(1, steps + 1)]
+                for px, py in pts:
+                    nx, ny = _norm_abs(px, py)
+                    _send([_mouse_event(flags, nx, ny)])
+                    _clock.sleep_ms(1.5)
             else:
-                self.move(x1, y1, humanize=humanize)
+                pts = p.path(x0, y0, x1, y1)
+                for px, py in pts:
+                    nx, ny = _norm_abs(px, py)
+                    _send([_mouse_event(flags, nx, ny)])
+                    _clock.sleep_ms(p._span(p.poll_interval_ms, self._actions))
+                self._actions += 1
         finally:
             self.up(button)
         return Point(x1, y1)

@@ -196,11 +196,13 @@ class Keyboard:
                 else:
                     downs, ups = self._unicode_events(ch)
                     _send(downs + ups)
-                # Measured 5ms gap: Windows Text Services Framework (TSF) requires
-                # >=4ms to reliably pump VK_PACKET Unicode characters without
-                # event merging or dropping on modern WinUI/XAML surfaces.
-                # At 5ms, speed is still 200 chars/second (sub-human latency).
-                _clock.sleep_ms(5.0)
+                # Measured floor: Windows Text Services Framework needs >=4 ms to
+                # commit one VK_PACKET before the next arrives, but 5 ms is the
+                # jittery boundary - it passed on an idle machine and failed
+                # under load ('日本語' collapsed to '本本語'). 6 ms is the first
+                # value that held across repeated runs, and it is still 166
+                # characters per second.
+                _clock.sleep_ms(6.0)
             return
 
         rng = p.rng
