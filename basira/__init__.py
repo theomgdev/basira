@@ -38,6 +38,7 @@ from . import humanize as _h
 from .humanize import CAREFUL, FAST, INSTANT, NATURAL, Profile
 from .keyboard import KEYS, Keyboard
 from .mouse import Clock, InputBlocked, Mouse, _clock
+from .ocr import OCR, OCRUnavailable, TextHit, TextSet
 from .screen import Frame, Point, Region, Screen, probe_window_dc
 from .vision import (Detection, DetectionSet, Vision, VisionUnavailable)
 from .window import (Window, active_window, all_windows, find_window,
@@ -105,7 +106,8 @@ class Auto:
 
     def __init__(self, *, humanize=None, precise_timing: bool = True,
                  vision_scale: str = "s", vision_device: str | None = None,
-                 confidence: float = 0.25):
+                 confidence: float = 0.25, ocr_lang: str = "multi",
+                 ocr_tier: str = "tiny"):
         self.screen = Screen()
         self.profile = _h.resolve(humanize)
         self.mouse = Mouse(self.profile)
@@ -113,6 +115,7 @@ class Auto:
         self.clock = _clock
         self.vision = Vision(scale=vision_scale, device=vision_device,
                              confidence=confidence)
+        self.ocr = OCR(lang=ocr_lang, tier=ocr_tier)
         if precise_timing:
             self.clock.begin_precision()
 
@@ -146,6 +149,7 @@ class Auto:
             "precise_timer": bool(self.clock._period),
             "stats": dict(self.screen.stats),
             "vision": self.vision.status(),
+            "ocr": self.ocr.status(),
         }
 
     # ----------------------------------------------------------------- mouse #
@@ -168,7 +172,7 @@ class Auto:
             if d is None:
                 raise NotFound(target, within)
             return d.center
-        if isinstance(target, Detection):
+        if isinstance(target, (Detection, TextHit)):
             return target.center
         if isinstance(target, Window):
             return target.client_rect.center
@@ -403,6 +407,122 @@ class Auto:
         guessing nouns and wondering why nothing matched."""
         return self.vision.vocabulary()
 
+    # ------------------------------------------------------------------- ocr #
+    def read(self, within=None, *, lang: str | None = None,
+             tier: str | None = None, fresh: bool = False,
+             confidence: float | None = None) -> TextSet:
+        """Read every text span on screen (or inside `within`).
+
+            spans = auto.read(dialog)
+            print(spans.texts())
+            for hit in spans.alphabetical(single_chars_only=True):
+                auto.click(hit)
+
+        Results are cached per (frame.seq, region, lang), so querying 26 letters
+        on the same frame runs OCR once (~11-15 ms on hybrid ORT+CUDA) and
+        answers the other 25 from RAM in ~1 us each.
+        """
+        f = self.grab() if fresh else self.frame()
+        reg = (within.client_rect if isinstance(within, Window)
+               else (None if within is None else Region(*within)))
+        return self.ocr.read(f, region=reg, lang=lang, tier=tier,
+                             confidence=confidence)
+
+    def find_text(self, query: str, within=None, *, exact: bool = False,
+                  case: bool = False, lang: str | None = None,
+                  fresh: bool = False,
+                  confidence: float | None = None) -> TextHit | None:
+        """Locate one text string on screen, or None.
+
+        With `exact=False` (default), if `query` appears inside a multi-word
+        line (e.g. 'Cancel' inside 'Save Changes Cancel'), the returned
+        `TextHit.box` is proportionally sliced to the matched substring so
+        clicking or selecting lands on the word itself.
+        """
+        return self.read(within, lang=lang, fresh=fresh,
+                         confidence=confidence).best(query, exact=exact, case=case)
+
+    def find_all_text(self, query: str | None = None, within=None, *,
+                      exact: bool = False, case: bool = False,
+                      lang: str | None = None, fresh: bool = False,
+                      confidence: float | None = None) -> list[TextHit]:
+        """Every occurrence of `query` on screen (or all text spans if None)."""
+        return self.read(within, lang=lang, fresh=fresh,
+                         confidence=confidence).all(query, exact=exact, case=case)
+
+    def click_text(self, query: str, within=None, *, exact: bool = False,
+                   case: bool = False, lang: str | None = None,
+                   fresh: bool = False, button: str = "left",
+                   count: int = 1, **kw) -> TextHit:
+        """Find `query` on screen via OCR and click it. Raises NotFound if absent."""
+        hit = self.find_text(query, within, exact=exact, case=case,
+                             lang=lang, fresh=fresh)
+        if hit is None:
+            raise NotFound(f"text {query!r}", within)
+        self.click(hit.center, button=button, count=count, **kw)
+        return hit
+
+    def hover_text(self, query: str, within=None, *, exact: bool = False,
+                   case: bool = False, lang: str | None = None,
+                   fresh: bool = False, **kw) -> TextHit:
+        """Find `query` on screen via OCR and move the pointer over its centre."""
+        hit = self.find_text(query, within, exact=exact, case=case,
+                             lang=lang, fresh=fresh)
+        if hit is None:
+            raise NotFound(f"text {query!r}", within)
+        self.move(hit.center, **kw)
+        return hit
+
+    def select_text(self, query: str | TextHit, within=None, *,
+                    action: str | None = None, exact: bool = False,
+                    case: bool = False, lang: str | None = None,
+                    fresh: bool = False, **kw) -> str | TextHit:
+        """Select text on screen by dragging from its left edge to its right edge.
+
+            auto.select_text("Order #4821", action="copy")  # -> 'Order #4821'
+            auto.select_text("draft", action="cut")
+
+        `action` may be None (leave highlighted), `'copy'` (`Ctrl+C` and return
+        clipboard text), `'cut'` (`Ctrl+X` and return clipboard text), or
+        `'delete'` (press Delete).
+        """
+        if isinstance(query, TextHit):
+            hit = query
+        else:
+            hit = self.find_text(query, within, exact=exact, case=case,
+                                 lang=lang, fresh=fresh)
+            if hit is None:
+                raise NotFound(f"text {query!r}", within)
+        self.drag(hit.start, hit.end, **kw)
+        if action is None:
+            return hit
+        act = action.lower().strip()
+        if act == "copy":
+            return self.copy()
+        if act == "cut":
+            self.press("ctrl", "x")
+            time.sleep(0.05)
+            return self.clipboard
+        if act in ("delete", "del", "clear"):
+            self.tap("delete")
+            return ""
+        raise ValueError(f"unknown select_text action {action!r}; use None, 'copy', 'cut', or 'delete'")
+
+    def wait_for_text(self, query: str, within=None, *, timeout: float = 15.0,
+                      exact: bool = False, case: bool = False,
+                      lang: str | None = None,
+                      required: bool = False) -> TextHit | None:
+        """Poll until `query` is readable on screen."""
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline:
+            hit = self.find_text(query, within, exact=exact, case=case,
+                                 lang=lang, fresh=True)
+            if hit is not None:
+                return hit
+        if required:
+            raise Timeout(f"text {query!r} to appear on screen", timeout)
+        return None
+
     # ---------------------------------------------------------------- screen #
     def grab(self, region=None) -> Frame:
         """A fresh frame. Costs one compositor frame."""
@@ -528,9 +648,11 @@ class Auto:
 auto = Auto()
 
 __all__ = [
-    "auto", "Auto", "Timeout", "NotFound", "InputBlocked", "VisionUnavailable",
+    "auto", "Auto", "Timeout", "NotFound", "InputBlocked",
+    "VisionUnavailable", "OCRUnavailable",
     "Frame", "Point", "Region", "Screen", "Window",
     "Detection", "DetectionSet", "Vision",
+    "TextHit", "TextSet", "OCR",
     "Mouse", "Keyboard", "Clock", "Profile", "clipboard",
     "INSTANT", "FAST", "NATURAL", "CAREFUL",
     "find_window", "find_windows", "wait_for_window", "all_windows",

@@ -36,7 +36,9 @@ auto.click("play button")     # survives moves, themes, resolutions
 
 ```bash
 pip install basira              # pixels, input, windows — pure ctypes, ~300 KB
-pip install 'basira[vision]'    # + open-vocabulary detection (torch, ultralytics)
+pip install 'basira[vision]'    # + open-vocabulary object detection (YOLOE-26)
+pip install 'basira[ocr]'       # + real-time 80+ language screen OCR (RapidOCR)
+pip install 'basira[all]'       # everything
 ```
 
 The vision layer is **optional on purpose**. Without it every pixel, input and window API still works; only the word-based calls raise, with the install hint attached.
@@ -73,6 +75,24 @@ auto.click("close tab", within=chrome)
 
 dialog = auto.region("dialog")
 auto.look(dialog).labels()          # what's in the dialog?
+```
+
+### Reading & Acting on Text (Real-Time Multilingual OCR)
+
+Backed by a hybrid **RapidOCR (PP-OCRv6/v5 DBNet + SVTR)** pipeline — **ONNX Runtime** for zero-copy CPU contour detection + **PyTorch CUDA** for parallel batch recognition (**10.9–15.1 ms** on a 360x140 region, **21–23 ms** on a 620x300 window, **80+ languages** including Turkish, English, CJK, Cyrillic, and Arabic):
+
+```python
+auto.click_text("Onayla")                          # click a button by its label
+auto.click_text("Cancel", within=dialog)           # proportional sub-box slicing inside lines
+auto.hover_text("Settings")                        # move pointer over text
+
+# Drag-select text on screen and copy/cut/delete it in one call
+token = auto.select_text("TOKEN-7391", action="copy")
+
+# Read all text once, then act on every span from RAM (~6.4 us/query)
+spans = auto.read(arena, fresh=True)
+for hit in spans.alphabetical(single_chars_only=True):
+    auto.click(hit)                                # click appearing letters A -> Z
 ```
 
 ### Pixels (no model required)
@@ -140,6 +160,7 @@ Live measurements on **Windows 11, RTX 3060 Ti, 3440x1440 @ 144 Hz, Python 3.11/
 | Screen read, bounded region | **6.94 ms** | = `DwmFlush()` = 1/144 s — the compositor sets this, not us |
 | Full-screen grab (5 MPx) | **29-34 ms** | max(vsync, 5 MB DIB copy) |
 | Unicode typing | **6 ms/char** | TSF needs >=6 ms under load or CJK codepoints merge |
+| Screen OCR (`PP-OCRv6` hybrid ORT+CUDA) | **10.9–23.5 ms** | 360x140 ROI in 13.1 ms p50 (10.9 ms min); **6.4 us** cached |
 | Open-vocabulary detection (`yoloe-26s-seg`) | **35 ms p50** | warm GPU forward pass; **1.2 us** on a cached frame |
 
 Three findings worth stating plainly, because they shaped the architecture:

@@ -62,3 +62,13 @@ Host: Windows 11 (AMD/RTX 3060 Ti, 3440x1440 @ 144 Hz, Python 3.11)
 - **Observation**: the first `set_classes()` call downloads `mobileclip2_b.ts` (242 MB) into `os.getcwd()`, and a bare checkpoint name resolves the same way.
 - **Consequence**: a user running the same script from a different folder re-downloads the entire text encoder. On a 10 Mbit line that is ~7 minutes, silently, per folder.
 - **Rule**: `chdir` to a stable cache directory for the duration of the load/`set_classes` call and restore the previous cwd in a `finally`. Pinning the cache turns a per-folder cost into a per-machine cost.
+
+## 8. Real-Time Screen OCR: The 17x Hybrid Pipeline & DBNet Upscale Trap
+
+- **Observation**: Out-of-the-box RapidOCR (`PP-OCRv6 small`, ONNX Runtime) took **186.8 ms** on a 360x140 UI region. Switching to pure `TORCH-CUDA` dropped it to **55.4 ms**, still 4x slower than expected (`det = 46.9 ms`, `rec = 7.7 ms`).
+- **Root Cause 1 (The `limit_type='min'` Upscale Trap)**: RapidOCR defaults to `Det.limit_type = 'min'` with `Det.limit_side_len = 736`. A 360x140 crop has its short side scaled to 736 px (producing an 1892x736 = 1.4 MPx tensor — a **19x pixel expansion**!) before DBNet runs. Setting `Det.limit_type = 'max'` (never upscale, only downscale large inputs) dropped DBNet from **46.9 ms to 4.5–9.6 ms** and prevented adjacent letters from blurring into a single box.
+- **Root Cause 2 (Stage Asymmetry — CPU Det + GPU Rec Hybrid)**:
+  - **DBNet (Detection)** outputs a probability map followed immediately by CPU contour extraction (`cv2.findContours` + polygon unclipping). On small/medium crops, running `PP-OCRv6_det_tiny` in **ONNX Runtime on CPU** takes **4.5 ms** — faster than GPU (**9.6 ms**) because it avoids the PCIe host-to-device-to-host roundtrip.
+  - **SVTR (Recognition)** runs over a batch of $N$ cropped word boxes (`[N, 3, 48, 320]`). On CPU, batch cost scales linearly (**40.0 ms**); on **PyTorch CUDA**, the batch executes in parallel in **5.8 ms** (`tiny`) to **11.0 ms** (`small`).
+  - Combining **`Det = ONNXRUNTIME` + `Rec = TORCH-CUDA`** achieved **13.1 ms p50 (10.9 ms min)** on the 360x140 test card and **23.5 ms p50 (21.3 ms min)** on a live 620x300 multilingual window (**17x faster** than default).
+- **Root Cause 3 (Single-Character DBNet Thresholds)**: DBNet is trained on multi-character text lines, so an isolated single-character button or target (e.g. a lone `'L'` or `'T'`) produces a mean box score of $0.22–0.28$ and gets discarded by the default `box_thresh = 0.5`. Setting `Det.thresh = 0.15` and `Det.box_thresh = 0.20` lets isolated single glyphs pass to SVTR, which recognizes them at $>0.98$ confidence.

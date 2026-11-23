@@ -41,6 +41,8 @@ dependencies = [
 # never run a neural network.
 [project.optional-dependencies]
 vision = ["ultralytics>=8.4.0"]
+ocr = ["rapidocr>=3.0.0", "onnxruntime>=1.18.0"]
+all = ["ultralytics>=8.4.0", "rapidocr>=3.0.0", "onnxruntime>=1.18.0"]
 
 [project.urls]
 Homepage = "https://github.com/theomgdev/basira"
