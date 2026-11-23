@@ -29,7 +29,7 @@ Host: Windows 11 (AMD/RTX 3060 Ti, 3440x1440 @ 144 Hz, Python 3.11)
 
 ## 4. Text Services Framework (TSF) Ingestion Limits
 
-- **Observation**: Emitting multiple `KEYEVENTF_UNICODE` characters with zero delay ($<2\text{ ms}$) into modern Windows 11 controls (XAML Notepad, Electron, RichEdit) causes character dropping, character merging, and tail repetition (e.g. `'YOLOE26 ok'` becoming `'YOLOE26 kk'`).
+- **Observation**: Emitting multiple `KEYEVENTF_UNICODE` characters with zero delay ($<2\text{ ms}$) into modern Windows 11 controls (XAML Notepad, Electron, RichEdit) causes character dropping, character merging, and tail repetition (e.g. `'Basira ok'` becoming `'Basira kk'`).
 - **Root Cause**: Windows TSF dispatches `VK_PACKET` events into `WM_IME_COMPOSITION` / `WM_CHAR` streams. If down/up events land within the same message queue slice, the composition buffer fails to commit previous codepoints before the next arrives.
 - **Rule**: Minimum delay between consecutive Unicode characters must be $\mathbf{\ge 6\text{ ms}}$. The theoretical floor is $\sim 4\text{ ms}$, and $5\text{ ms}$ passed on an idle machine, but under load `'日本語'` collapsed to `'本本語'` at $5\text{ ms}$ while $6\text{ ms}$ held across repeated runs. At 6 ms, typing throughput is 166 characters per second with 100% fidelity across all Unicode planes.
 

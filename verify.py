@@ -251,7 +251,7 @@ try:
         auto.tap("delete")
         auto.wait(0.2)
 
-        probe = "YOLOE26 ok"
+        probe = "Basira ok"
         t0 = time.perf_counter()
         auto.type(probe)
         fast_ms = (time.perf_counter() - t0) * 1000

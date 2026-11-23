@@ -100,7 +100,7 @@ class NotFound(LookupError):
 
 
 class Auto:
-    """The façade. One instance is created as `yoloe26.auto`; constructing more
+    """The façade. One instance is created as `basira.auto`; constructing more
     is fine and they share no mutable global state beyond the OS itself."""
 
     def __init__(self, *, humanize=None, precise_timing: bool = True,
