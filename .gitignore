@@ -36,3 +36,12 @@ ENV/
 *.tmp
 temp/
 scratch/
+
+# Model weights and encoders — downloaded on first use, never committed
+*.pt
+*.ts
+*.onnx
+*.engine
+*.part
+.*.part
+runs/

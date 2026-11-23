@@ -32,3 +32,27 @@ Host: Windows 11 (AMD/RTX 3060 Ti, 3440x1440 @ 144 Hz, Python 3.11)
 - **Observation**: Emitting multiple `KEYEVENTF_UNICODE` characters with zero delay ($<2\text{ ms}$) into modern Windows 11 controls (XAML Notepad, Electron, RichEdit) causes character dropping, character merging, and tail repetition (e.g. `'YOLOE26 ok'` becoming `'YOLOE26 kk'`).
 - **Root Cause**: Windows TSF dispatches `VK_PACKET` events into `WM_IME_COMPOSITION` / `WM_CHAR` streams. If down/up events land within the same message queue slice, the composition buffer fails to commit previous codepoints before the next arrives.
 - **Rule**: Minimum delay between consecutive Unicode characters must be $\mathbf{\ge 4-5\text{ ms}}$. At 5 ms, typing throughput is 200 characters per second with 100% fidelity across all Unicode planes.
+
+## 5. 64-bit Ctypes Handle Truncation
+
+- **Observation**: `CreateCompatibleDC(screen_dc)` raised `OverflowError: int too long to convert`; a later `GlobalLock` returned the pointer `0xFFFFFFFFC469B7E0`.
+- **Root Cause**: Without explicit `argtypes`/`restype`, ctypes marshals handles as 32-bit signed `int`. A handle whose value exceeds 32 bits either overflows on the way in, or comes back sign-extended on the way out — and the sign-extended pointer is the worse case, because it fails later and elsewhere (an access violation inside `wstring_at`, far from the call that produced it).
+- **Rule**: Bind `argtypes` and `restype` on **every** Win32 function the library calls, using `w.HWND`, `w.HDC`, `w.HBITMAP`, `w.HANDLE` or `ctypes.c_void_p`. This is not defensive style; an unbound signature is a latent crash whose probability depends on how long the machine has been running.
+
+## 6. Open-Vocabulary Detection Inherits the Frame-Coherence Rule
+
+- **Observation**: a YOLOE-26s forward pass sits in the same order of magnitude as a compositor frame on GPU, and far above it on CPU.
+- **Architectural Consequence**: the naive shape
+  ```python
+  auto.click(auto.see("cat"))
+  auto.click(auto.see("dog"))
+  ```
+  would run the model twice over what is conceptually one glance. Detection results must therefore be cached on `(frame.seq, region, prompt-set, confidence)`, exactly as pixel queries are cached on the frame. **Changing the prompt set is what forces new work; asking another question is not.**
+- **Secondary cost**: `set_classes()` runs the CLIP text encoder, so re-setting an identical prompt tuple pays the encoder for nothing. Compare prompt tuples before calling it.
+- **Multi-detection consistency**: when clicking every instance of a thing, all boxes must come from ONE frame. A detect-click-detect loop chases a layout that the first click already changed.
+
+## 7. Ultralytics Resolves Assets Against the Working Directory
+
+- **Observation**: the first `set_classes()` call downloads `mobileclip2_b.ts` (242 MB) into `os.getcwd()`, and a bare checkpoint name resolves the same way.
+- **Consequence**: a user running the same script from a different folder re-downloads the entire text encoder. On a 10 Mbit line that is ~7 minutes, silently, per folder.
+- **Rule**: `chdir` to a stable cache directory for the duration of the load/`set_classes` call and restore the previous cwd in a `finally`. Pinning the cache turns a per-folder cost into a per-machine cost.

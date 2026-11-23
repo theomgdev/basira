@@ -1,91 +1,174 @@
-# YOLOE-26
+# BASIRA
 
-**Fast, organic, and ultra-simple desktop automation for Python — inspired by AutoIt.**
+**بصيرة** — *insight: seeing a thing and grasping what it is.*
 
-YOLOE-26 is built on a single premise: **automation code should read like plain English, execute with hardware-floor latency, and look completely human on wire whenever you toggle it.**
-
-Zero heavyweight dependencies (only standard library `ctypes` + `numpy`). Zero guesswork.
-
----
-
-## Quickstart
+Desktop automation where you **name what you want** instead of guessing where it is.
 
 ```python
-from yoloe26 import auto
+from basira import auto
 
-# 1. Ultra-simple window discovery & control
-notepad = auto.wait_window("Notepad")
-notepad.activate()
+auto.click("cat")                    # finds a cat on screen, clicks it
+auto.click("submit button")          # words, not coordinates
+auto.drag("red card", "discard pile")
+```
 
-# 2. Instant or layout-independent typing
-auto.type("Hello world!\nTürkçe karakterler: ığüşöç İĞÜŞÖÇ\nUnicode: 日本語 🚀")
+In classical usage `basar` is bare sight; `basira` is sight that *understands*. That is exactly the split in this library: the pixel layer sees colours, the vision layer sees a cat.
 
-# 3. Screen inspection (Frame-coherent, 0.44 us per query)
-pos = auto.locate("#ff0000")  # find red block centroid
-if pos:
-    auto.click(pos)
+---
 
-# 4. Turn on organic motion with one call (anti-bot evasion)
-auto.humanize()  # or auto.humanize('careful')
-auto.click(500, 300)  # travels along a biological wrist-arc curve with micro-tremor
+## Why
+
+AutoIt got one thing profoundly right: automation should be writable by someone who is not a programmer. It also left one thing unsolved — scripts are written in coordinates and raw pixel colours, so they break the moment a window moves, a theme changes, or a display scales.
+
+Basira keeps AutoIt's simplicity and replaces the brittle part. Under the hood: Win32 at its latency floor, [Ultralytics YOLOE](https://docs.ultralytics.com/models/yoloe) (*Real-Time Seeing Anything*) for open-vocabulary detection — the class list is a text prompt at inference time, so there is no training step and no fixed vocabulary.
+
+```python
+# The brittle way (every other library)
+auto.click(847, 392)          # what was at 847,392? nobody knows in six months
+
+# The Basira way
+auto.click("play button")     # survives moves, themes, resolutions
 ```
 
 ---
 
-## Measured Real-World Performance
-
-All measurements taken live on **Windows 11 (AMD/RTX 3060 Ti, 3440x1440 @ 144Hz, Python 3.11)**:
-
-| Operation | Cost | Mechanism / Invariant |
-|---|---|---|
-| `GetForegroundWindow` | **0.1 us** | Win32 direct call |
-| Window sweep (`EnumWindows`, 264 windows) | **46 us** | Direct Win32 callback |
-| SendInput mouse move (cached) | **26 us** | Win32 `SendInput` single event |
-| SendInput batched (8 events) | **5.9 us/ev** | Win32 batch queue sweet spot |
-| Sub-millisecond sleep (`auto.wait(0.001)`) | **1.000 ms** | `timeBeginPeriod(1)` + spin tail |
-| Frame query from RAM (`pixel()`, `find()`) | **0.44 us** | Vectorized uint32 NumPy view |
-| Screen acquisition (small ROI) | **6.94 ms** | Hardware DWM compositor vsync lock ($1/144\text{s}$) |
-| Full screen grab (3440x1440, 5 MPx) | **29-34 ms** | $\max(\text{vsync}, \text{5 MPx DIB memory copy})$ |
-
-### The "Fast-but-Black" Window DC Trap
-
-A raw window DC BitBlt takes only **0.018 ms** (385x faster than screen BitBlt). However, live measurements across real running applications prove that **7 out of 8 windows return a pitch-black flat field** because modern applications (Chrome, Electron, UWP, WPF) are GPU-composited directly by DWM.
-
-YOLOE-26 includes `probe_window_dc(hwnd)` to verify whether a window can actually provide live pixels before ever attempting to read from it. For all other surfaces, `Screen.grab()` uses compositor-coherent sampling.
-
----
-
-## Frame-Coherent Architecture
-
-In libraries like AutoIt (`PixelGetColor`) or PyAutoGUI (`pixel()`), querying 100 pixels invokes 100 individual screen reads — taking **694 ms** and returning pixels from 100 different moments in time.
-
-In YOLOE-26:
-- `auto.grab()` captures a frame once (costing 1 compositor frame).
-- `auto.frame()` reuses the existing frame if it is younger than the monitor's refresh period ($6.94\text{ ms}$ at 144Hz).
-- 1,000 subsequent pixel queries on the frame take only **0.45 ms** in RAM.
-
----
-
-## Humanize / Anti-Bot Detection
-
-When `auto.humanize()` is enabled:
-1. **Biological Paths**: Moves follow a cubic Bézier trajectory with perpendicular offsets mimicking the human wrist rotation arc, minimum-jerk velocity time-warping (slow start, fast flight, soft landing), and high-frequency neuromuscular tremor.
-2. **Batched Injection**: Trajectory waypoints are sent in 8-event HID report bursts matching physical mouse polling intervals (1-7 ms), making organic curves **1.5x faster** than naive per-event automation.
-3. **Paced Typing**: Unicode codepoints are injected with variable hold/gap delays matching human typing cadences, with optional typo correction.
-
-Presets: `INSTANT` (default), `FAST`, `NATURAL`, `CAREFUL`.
-
----
-
-## Verification Suite
-
-Run the full 55-point live verification suite on any Windows machine:
+## Install
 
 ```bash
-python verify.py
+pip install basira              # pixels, input, windows — pure ctypes, ~300 KB
+pip install 'basira[vision]'    # + open-vocabulary detection (torch, ultralytics)
 ```
 
-Validates DPI awareness, timer precision, GDI frame caching, synthetic color matching, path geometry, batching economics, live Notepad input roundtrip via Win32 clipboard, and cursor restoration.
+The vision layer is **optional on purpose**. Without it every pixel, input and window API still works; only the word-based calls raise, with the install hint attached.
+
+---
+
+## The API
+
+### Seeing
+
+```python
+auto.see("cat")                     # -> Detection | None  (highest confidence)
+auto.see_all("button")              # -> [Detection, ...]
+auto.sees("error dialog")           # -> bool
+auto.region("sidebar")              # -> Region | None  (bounding box)
+auto.look()                         # -> DetectionSet: everything on screen
+auto.look().labels()                # -> what IS this screen? explore mode
+auto.wait_to_see("done", timeout=30)
+auto.click_all("checkbox")          # clicks every one, from a single frame
+```
+
+Every target-taking call accepts a word, so `move`, `click`, `double_click`, `right_click`, `drag` and `scroll` all work the same way.
+
+### Scoping with `within`
+
+Regions compose, which is how you say *"the one in the left panel"*:
+
+```python
+player = auto.region("video player")
+auto.click("play button", within=player)
+
+chrome = auto.find("Chrome").client_rect
+auto.click("close tab", within=chrome)
+
+dialog = auto.region("dialog")
+auto.look(dialog).labels()          # what's in the dialog?
+```
+
+### Pixels (no model required)
+
+```python
+auto.pixel(100, 200)                # -> 0xRRGGBB
+auto.locate("#ff0000")              # -> Point: colour centroid
+auto.locate_all("#ff0000")
+auto.count_color("#ff0000")
+auto.exists("#ff0000")              # colour -> pixel layer
+auto.exists("cat")                  # word   -> vision layer
+frame = auto.grab()                 # immutable moment of the screen
+frame.bounds("#ff0000")             # -> Region
+frame.changed_from(previous)
+```
+
+### Input
+
+```python
+auto.type("Türkçe ıİşŞğĞ + 日本語 works")   # layout-independent Unicode
+auto.press("ctrl+s")                        # or press('ctrl', 's')
+auto.tap("enter", count=3)
+with auto.hold("shift"):
+    auto.click("file")
+auto.copy()                                 # -> clipboard text
+auto.paste("text")
+auto.wait(0.001)                            # real sub-millisecond sleep
+```
+
+### Windows
+
+```python
+w = auto.wait_window("Notepad")     # waits until actually usable, not just visible
+w.activate(); w.maximize()
+w.client_rect                       # drawable area, DWM border excluded
+w.responsive()                      # is its message pump alive?
+auto.windows()                      # every top-level window (46 us)
+```
+
+### Humanize
+
+Off by default. One call turns it on:
+
+```python
+auto.humanize()              # natural
+auto.humanize("careful")     # slower, more tremor, fatigue drift
+auto.humanize(False)         # back to instant
+auto.click("button", humanize="fast")   # or per-call
+```
+
+---
+
+## Measured Performance
+
+Live measurements on **Windows 11, RTX 3060 Ti, 3440x1440 @ 144 Hz, Python 3.11/3.13**:
+
+| Operation | Cost | Why that number |
+|---|---|---|
+| `GetForegroundWindow` | **0.1 us** | direct Win32 call |
+| Window sweep (264 windows) | **46 us** | `EnumWindows` callback — lookup is free, don't cache handles |
+| `SendInput`, 1 event | **26 us** | one kernel transition |
+| `SendInput`, batch of 8 | **5.9 us/event** | measured optimum; 32 decays to 13.2, 128 to 16.0 |
+| `auto.wait(0.001)` | **1.000 ms** | `timeBeginPeriod(1)` + spin tail (default timer is 15.6 ms) |
+| Pixel query from a frame | **0.44 us** | vectorised uint32 compare in RAM |
+| Screen read, bounded region | **6.94 ms** | = `DwmFlush()` = 1/144 s — the compositor sets this, not us |
+| Full-screen grab (5 MPx) | **29-34 ms** | max(vsync, 5 MB DIB copy) |
+| Unicode typing | **5 ms/char** | TSF needs >=4 ms between `VK_PACKET` events or it drops them |
+
+Three findings worth stating plainly, because they shaped the architecture:
+
+**Screen reads are frame-quantized.** A 1-pixel read and a 1280x720 read both cost 6.94 ms, exactly matching `DwmFlush()` on a 144 Hz display. So a per-query API (`PixelGetColor`, `pyautogui.pixel()`) pays a full compositor frame per question — 100 questions cost 694 ms *and* return pixels from 100 different moments. Basira captures a `Frame` once and answers from RAM.
+
+**The fast window-DC path is usually a lie.** Blitting a window DC takes 0.018 ms — 385x faster. But measured across live windows, **7 of 8 returned pitch black** (Chrome, Electron, UWP — all GPU-composited). `probe_window_dc()` checks colour variance before trusting that path, because fast-and-empty is worse than slow-and-correct.
+
+**Organic motion is cheaper than naive automation.** An 89-point human-like trajectory sent in 8-event batches beats one-call-per-event by **1.4-1.7x** measured. Looking human is not a latency tax; sending events one at a time is.
+
+---
+
+## Verification
+
+```bash
+python verify.py          # 55 live checks: all pass on the dev host
+python vision_smoke.py    # vision layer, timings and cache behaviour
+```
+
+`verify.py` drives the real OS: launches its own Notepad, types ASCII + Turkish + Japanese, reads it back through the Win32 clipboard, verifies organic path geometry lands pixel-exact, and restores the cursor to where you left it.
+
+---
+
+## Limits, stated honestly
+
+- **Windows only.** The input and screen layers are Win32. A Linux/macOS backend is possible but does not exist.
+- **Zero-shot detection is not trained-on-your-data detection.** YOLOE lands roughly in the 22-40 mAP band on LVIS. Reach for it to cover things you cannot train for.
+- **A prompt describes appearance, not relationships.** "damaged", "left-most", "the one being carried" have no visual handle. Use `within=` for spatial constraints instead.
+- **First vision call downloads weights** (~30 MB) plus a text encoder (~254 MB), and the encoder writes a `.ts` file into the working directory. `auto.vision.status()` reports what is loaded and what it measured.
+- **Large prompt sets cost latency.** Prompt embeddings are compared against region features every forward pass; the full 4,585-name vocabulary is ~89% slower than 80 names, and FLOPs counters won't warn you.
 
 ---
 
