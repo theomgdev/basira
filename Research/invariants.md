@@ -67,6 +67,8 @@ Host: Windows 11 (AMD/RTX 3060 Ti, 3440x1440 @ 144 Hz, Python 3.11)
 
 - **Observation**: Out-of-the-box RapidOCR (`PP-OCRv6 small`, ONNX Runtime) took **186.8 ms** on a 360x140 UI region. Switching to pure `TORCH-CUDA` dropped it to **55.4 ms**, still 4x slower than expected (`det = 46.9 ms`, `rec = 7.7 ms`).
 - **Root Cause 1 (The `limit_type='min'` Upscale Trap)**: RapidOCR defaults to `Det.limit_type = 'min'` with `Det.limit_side_len = 736`. A 360x140 crop has its short side scaled to 736 px (producing an 1892x736 = 1.4 MPx tensor — a **19x pixel expansion**!) before DBNet runs. Setting `Det.limit_type = 'max'` (never upscale, only downscale large inputs) dropped DBNet from **46.9 ms to 4.5–9.6 ms** and prevented adjacent letters from blurring into a single box.
+
+## 9. Click-Through HUD Overlays: Five Physical Traps
 - **Root Cause 2 (Stage Asymmetry — CPU Det + GPU Rec Hybrid)**:
   - **DBNet (Detection)** outputs a probability map followed immediately by CPU contour extraction (`cv2.findContours` + polygon unclipping). On small/medium crops, running `PP-OCRv6_det_tiny` in **ONNX Runtime on CPU** takes **4.5 ms** — faster than GPU (**9.6 ms**) because it avoids the PCIe host-to-device-to-host roundtrip.
   - **SVTR (Recognition)** runs over a batch of $N$ cropped word boxes (`[N, 3, 48, 320]`). On CPU, batch cost scales linearly (**40.0 ms**); on **PyTorch CUDA**, the batch executes in parallel in **5.8 ms** (`tiny`) to **11.0 ms** (`small`).

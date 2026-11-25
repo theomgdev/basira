@@ -143,6 +143,29 @@ auto.humanize(False)         # back to instant
 auto.click("button", humanize="fast")   # or per-call
 ```
 
+### Visual Debugging & HUD Overlay
+
+When open-vocabulary vision or OCR misses, diagnosing it usually requires capturing screenshots and inspecting them offline. Basira includes an in-process, click-through (`WS_EX_TRANSPARENT`), per-pixel-alpha overlay that draws directly over running games and apps without stealing focus or intercepting clicks:
+
+```python
+# Show YOLOE detections for 2 seconds (default), color-coded per class
+auto.show(auto.look())
+
+# Show OCR text hits on screen for 5 seconds
+auto.show(auto.read(), seconds=5.0)
+
+# Highlight a watched ROI or point
+auto.show(my_region, color="cyan", seconds=None)    # stays until next show/hide
+auto.hide()                                        # clear overlay
+
+# One-shot blocking flash for quick sanity inspection
+auto.flash(auto.look(), seconds=1.5)
+```
+
+- **Zero input interference:** `WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` ensures the overlay never eats a click or drops a game out of fullscreen.
+- **Sub-2ms frame latency:** Premultiplied DIB section update (`1.45 ms p50` on 3440×1440), negligible overhead in 30–60 Hz automation loops.
+- **Non-blocking expiration:** `seconds=t` schedules auto-hide on an asynchronous worker without stalling your automation logic.
+
 ---
 
 ## Measured Performance

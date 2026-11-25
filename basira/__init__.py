@@ -39,6 +39,7 @@ from .humanize import CAREFUL, FAST, INSTANT, NATURAL, Profile
 from .keyboard import KEYS, Keyboard
 from .mouse import Clock, InputBlocked, Mouse, _clock
 from .ocr import OCR, OCRUnavailable, TextHit, TextSet
+from .overlay import Overlay, flash as _flash, hide as _hide, overlay, show as _show
 from .screen import Frame, Point, Region, Screen, probe_window_dc
 from .vision import (Detection, DetectionSet, Vision, VisionUnavailable)
 from .window import (Window, active_window, all_windows, find_window,
@@ -522,6 +523,35 @@ class Auto:
         if required:
             raise Timeout(f"text {query!r} to appear on screen", timeout)
         return None
+
+    # --------------------------------------------------------------- overlay #
+    def show(self, items, *, color=None, seconds: float | None = 2.0,
+             labels: bool = True, width: int = 2, fill_alpha: int = 0,
+             clear: bool = True, text_size: int = 15,
+             crosshair_at=None) -> Overlay:
+        """Draw detections, OCR hits, regions or points as a screen overlay.
+
+        The overlay is click-through (`WS_EX_TRANSPARENT`) and takes no focus,
+        so it is safe to leave visible while an automation runs underneath.
+
+            auto.show(auto.look())                 # YOLOE bounding boxes
+            auto.show(auto.read(), seconds=5)      # OCR text chips
+            auto.show(my_region, color="cyan")     # watched crop bounds
+            auto.show(dets, seconds=None)          # stay until next show/hide
+
+        Pass `seconds=None` when updating every frame inside a live loop.
+        """
+        return _show(items, color=color, seconds=seconds, labels=labels,
+                     width=width, fill_alpha=fill_alpha, clear=clear,
+                     text_size=text_size, crosshair_at=crosshair_at)
+
+    def hide(self):
+        """Clear and hide the screen overlay."""
+        _hide()
+
+    def flash(self, items, seconds: float = 2.0, **kw):
+        """Draw items, sleep for `seconds`, then hide. For debug inspection."""
+        _flash(items, seconds=seconds, **kw)
 
     # ---------------------------------------------------------------- screen #
     def grab(self, region=None) -> Frame:

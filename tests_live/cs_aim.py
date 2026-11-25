@@ -241,7 +241,8 @@ def probe():
     return True
 
 
-def aim(gain: float = AIM_GAIN, fire_mode: str = DEFAULT_FIRE_MODE):
+def aim(gain: float = AIM_GAIN, fire_mode: str = DEFAULT_FIRE_MODE,
+        show_overlay: bool = False):
     print("=" * 78)
     print("AIM: hold CTRL to lock on and fire. Press END to quit.")
     print("=" * 78)
@@ -254,6 +255,7 @@ def aim(gain: float = AIM_GAIN, fire_mode: str = DEFAULT_FIRE_MODE):
           f"fire window={'off (always)' if FIRE_WINDOW_RATIO <= 0 else f'{FIRE_WINDOW_RATIO}x box height, min {FIRE_WINDOW_MIN_PX}px'}")
     print(f"   fire mode={fire_mode!r}: burst {burst_ms[0]}-{burst_ms[1]} ms, "
           f"pause {pause_ms[0]}-{pause_ms[1]} ms")
+    print(f"   overlay={'ON (live debug bounding boxes)' if show_overlay else 'off (pass --overlay to enable)'}")
 
     # Warm the model so the first CTRL press is not a 4-second stall.
     auto.vision.detect(auto.grab(reg), PROMPTS[:1])
@@ -265,9 +267,10 @@ def aim(gain: float = AIM_GAIN, fire_mode: str = DEFAULT_FIRE_MODE):
     bursts = 0
     loop_ms: list[float] = []
     frames = 0
-    # Deadline for the current trigger phase: while holding, when to release;
-    # while released, when the next burst may begin.
     phase_until = 0.0
+
+    from basira.overlay import overlay as _get_overlay
+    ov = _get_overlay() if show_overlay else None
 
     def release():
         nonlocal firing
@@ -279,6 +282,8 @@ def aim(gain: float = AIM_GAIN, fire_mode: str = DEFAULT_FIRE_MODE):
         while not key_down(VK_END):
             if not key_down(VK_CONTROL):
                 release()
+                if ov and ov._visible:
+                    ov.hide()
                 if engaged:
                     print(f"   release -> ceasefire after {frames} frames, "
                           f"{bursts} bursts")
@@ -289,20 +294,52 @@ def aim(gain: float = AIM_GAIN, fire_mode: str = DEFAULT_FIRE_MODE):
 
             t0 = time.perf_counter()
             frame = auto.grab(reg)
-            dets = [d for d in auto.vision.detect(frame, PROMPTS, confidence=0.15)
-                    if plausible_target(d, reg)]
+            raw_dets = auto.vision.detect(frame, PROMPTS, confidence=0.05)
+            dets = [d for d in raw_dets if plausible_target(d, reg)]
+
+            # Live screen overlay: draw what the bot sees directly on screen.
+            # 1.45 ms draw cost, completely click-through, auto-hides on release.
+            if ov is not None:
+                ov.clear()
+                # Cyan outline for the watched region itself
+                ov.rect(reg, color="cyan", width=1, fill_alpha=0)
+                # Red boxes for rejected candidates, with the rejection reason
+                for d in raw_dets:
+                    if d not in dets:
+                        reason = ("conf" if d.confidence < MIN_CONF else
+                                  "aspect" if d.box.width / max(1, d.box.height) > MAX_ASPECT else
+                                  "viewmodel" if (d.center.y - reg.y) / reg.height > VIEWMODEL_BAND else
+                                  "too-close" if d.box.height > reg.height * MAX_HEIGHT_FRAC else
+                                  "clipped")
+                        ov.rect(d.box, color="red", width=1)
+                        from basira.screen import Point
+                        ov.label(Point(d.box.x, d.box.y), f"{d.label} [{reason}]",
+                                 color="red", size=13)
+                # Lime boxes for surviving candidates
+                for d in dets:
+                    a = d.box.width / max(1, d.box.height)
+                    ov.rect(d.box, color="lime", width=2)
+                    from basira.screen import Point
+                    ov.label(Point(d.box.x, d.box.y),
+                             f"{d.label} {d.confidence:.2f} a={a:.2f}",
+                             color="lime", size=14)
 
             if not dets:
+                if ov is not None:
+                    ov.present()
                 release()
                 continue
 
-            # Best score: close to the crosshair, but penalised for filling the
-            # frame — so a distant enemy beats a teammate standing beside you.
             target = min(dets, key=lambda d: target_score(d, cx, cy))
-            # Aim upper torso rather than the box midpoint (which is the belly).
             ax = target.center.x
             ay = target.box.y + int(target.box.height * 0.35)
             err = ((ax - cx) ** 2 + (ay - cy) ** 2) ** 0.5
+
+            if ov is not None:
+                # Mark the chosen target's aim point with a red crosshair
+                from basira.screen import Point
+                ov.crosshair(Point(ax, ay), color="red", size=16, width=2)
+                ov.present()
 
             if not engaged:
                 # A human does not react the instant a shape enters the frame.
@@ -352,6 +389,8 @@ def aim(gain: float = AIM_GAIN, fire_mode: str = DEFAULT_FIRE_MODE):
             loop_ms.append((time.perf_counter() - t0) * 1000)
     finally:
         release()
+        if ov is not None:
+            ov.close()
 
     if loop_ms:
         loop_ms.sort()
@@ -368,17 +407,20 @@ if __name__ == "__main__":
     elif mode == "aim":
         g = AIM_GAIN
         fm = DEFAULT_FIRE_MODE
+        overlay_flag = False
         for a in sys.argv[2:]:
-            if a in FIRE_MODES:
+            if a in ("--overlay", "-o", "overlay"):
+                overlay_flag = True
+            elif a in FIRE_MODES:
                 fm = a
             else:
                 try:
                     g = float(a)
                 except ValueError:
                     print(f"unknown argument {a!r}; "
-                          f"fire modes: {', '.join(FIRE_MODES)}")
+                          f"fire modes: {', '.join(FIRE_MODES)}, flags: --overlay")
                     sys.exit(2)
-        aim(gain=g, fire_mode=fm)
+        aim(gain=g, fire_mode=fm, show_overlay=overlay_flag)
     else:
         print(__doc__)
         sys.exit(2)

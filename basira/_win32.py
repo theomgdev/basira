@@ -242,6 +242,136 @@ def virtual_screen_rect() -> tuple[int, int, int, int]:
     )
 
 
+# ---------------------------------------------------------------------------
+# Layered windows: per-pixel-alpha overlays drawn on top of other apps.
+#
+# WS_EX_TRANSPARENT is the load-bearing flag: without it the overlay swallows
+# every click in its own rectangle, which would make an automation library's
+# debug view break the automation it is meant to show. WS_EX_NOACTIVATE keeps
+# it from stealing focus, which otherwise minimises fullscreen games.
+# ---------------------------------------------------------------------------
+
+WS_POPUP = 0x80000000
+WS_EX_LAYERED = 0x00080000
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_TOPMOST = 0x00000008
+WS_EX_NOACTIVATE = 0x08000000
+WS_EX_TOOLWINDOW = 0x00000080
+
+SW_SHOWNOACTIVATE = 4
+SW_HIDE = 0
+
+ULW_ALPHA = 0x00000002
+AC_SRC_OVER = 0x00
+AC_SRC_ALPHA = 0x01
+
+WM_DESTROY = 0x0002
+WM_CLOSE = 0x0010
+
+TRANSPARENT_BKMODE = 1
+OPAQUE_BKMODE = 2
+
+FW_NORMAL = 400
+FW_BOLD = 700
+DEFAULT_CHARSET = 1
+ANTIALIASED_QUALITY = 4
+CLEARTYPE_QUALITY = 5
+DEFAULT_PITCH = 0
+
+
+class BLENDFUNCTION(ctypes.Structure):
+    _fields_ = [
+        ("BlendOp", ctypes.c_ubyte),
+        ("BlendFlags", ctypes.c_ubyte),
+        ("SourceConstantAlpha", ctypes.c_ubyte),
+        ("AlphaFormat", ctypes.c_ubyte),
+    ]
+
+
+WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_longlong, w.HWND, w.UINT,
+                             ctypes.c_ulonglong, ctypes.c_longlong)
+
+
+class WNDCLASSW(ctypes.Structure):
+    _fields_ = [
+        ("style", w.UINT), ("lpfnWndProc", WNDPROC), ("cbClsExtra", ctypes.c_int),
+        ("cbWndExtra", ctypes.c_int), ("hInstance", w.HINSTANCE),
+        ("hIcon", w.HICON), ("hCursor", w.HANDLE), ("hbrBackground", w.HBRUSH),
+        ("lpszMenuName", w.LPCWSTR), ("lpszClassName", w.LPCWSTR),
+    ]
+
+
+class MSG(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", w.HWND), ("message", w.UINT), ("wParam", ctypes.c_ulonglong),
+        ("lParam", ctypes.c_longlong), ("time", w.DWORD), ("pt", w.POINT),
+    ]
+
+
+user32.RegisterClassW.argtypes = (ctypes.POINTER(WNDCLASSW),)
+user32.RegisterClassW.restype = w.WORD
+user32.CreateWindowExW.argtypes = (
+    w.DWORD, w.LPCWSTR, w.LPCWSTR, w.DWORD,
+    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    w.HWND, w.HMENU, w.HINSTANCE, w.LPVOID)
+user32.CreateWindowExW.restype = w.HWND
+user32.DefWindowProcW.argtypes = (w.HWND, w.UINT, ctypes.c_ulonglong,
+                                  ctypes.c_longlong)
+user32.DefWindowProcW.restype = ctypes.c_longlong
+user32.DestroyWindow.argtypes = (w.HWND,)
+user32.DestroyWindow.restype = w.BOOL
+user32.ShowWindow.argtypes = (w.HWND, ctypes.c_int)
+user32.ShowWindow.restype = w.BOOL
+user32.ShowWindowAsync.argtypes = (w.HWND, ctypes.c_int)
+user32.ShowWindowAsync.restype = w.BOOL
+user32.UpdateLayeredWindow.argtypes = (
+    w.HWND, w.HDC, ctypes.POINTER(w.POINT), ctypes.POINTER(w.SIZE),
+    w.HDC, ctypes.POINTER(w.POINT), w.COLORREF,
+    ctypes.POINTER(BLENDFUNCTION), w.DWORD)
+user32.UpdateLayeredWindow.restype = w.BOOL
+user32.PeekMessageW.argtypes = (ctypes.POINTER(MSG), w.HWND, w.UINT, w.UINT, w.UINT)
+user32.PeekMessageW.restype = w.BOOL
+user32.TranslateMessage.argtypes = (ctypes.POINTER(MSG),)
+user32.DispatchMessageW.argtypes = (ctypes.POINTER(MSG),)
+user32.DispatchMessageW.restype = ctypes.c_longlong
+user32.SetWindowPos.argtypes = (w.HWND, w.HWND, ctypes.c_int, ctypes.c_int,
+                                ctypes.c_int, ctypes.c_int, w.UINT)
+user32.SetWindowPos.restype = w.BOOL
+
+gdi32.CreateDIBSection.argtypes = (w.HDC, ctypes.POINTER(BITMAPINFO), w.UINT,
+                                   ctypes.POINTER(ctypes.c_void_p), w.HANDLE,
+                                   w.DWORD)
+gdi32.CreateDIBSection.restype = w.HBITMAP
+gdi32.CreateFontW.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                              ctypes.c_int, ctypes.c_int, w.DWORD, w.DWORD,
+                              w.DWORD, w.DWORD, w.DWORD, w.DWORD, w.DWORD,
+                              w.DWORD, w.LPCWSTR)
+gdi32.CreateFontW.restype = w.HFONT
+gdi32.SetTextColor.argtypes = (w.HDC, w.COLORREF)
+gdi32.SetTextColor.restype = w.COLORREF
+gdi32.SetBkColor.argtypes = (w.HDC, w.COLORREF)
+gdi32.SetBkColor.restype = w.COLORREF
+gdi32.SetBkMode.argtypes = (w.HDC, ctypes.c_int)
+gdi32.SetBkMode.restype = ctypes.c_int
+gdi32.TextOutW.argtypes = (w.HDC, ctypes.c_int, ctypes.c_int, w.LPCWSTR,
+                           ctypes.c_int)
+gdi32.TextOutW.restype = w.BOOL
+gdi32.GetTextExtentPoint32W.argtypes = (w.HDC, w.LPCWSTR, ctypes.c_int,
+                                        ctypes.POINTER(w.SIZE))
+gdi32.GetTextExtentPoint32W.restype = w.BOOL
+gdi32.PatBlt.argtypes = (w.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                         ctypes.c_int, w.DWORD)
+gdi32.PatBlt.restype = w.BOOL
+
+BLACKNESS = 0x00000042
+
+
+def module_handle():
+    kernel32.GetModuleHandleW.argtypes = (w.LPCWSTR,)
+    kernel32.GetModuleHandleW.restype = w.HMODULE
+    return kernel32.GetModuleHandleW(None)
+
+
 def refresh_interval_ms() -> float:
     """The compositor frame time. This is the hard floor of every screen read."""
     class DEVMODE(ctypes.Structure):
