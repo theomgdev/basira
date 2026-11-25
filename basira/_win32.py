@@ -322,6 +322,10 @@ user32.DestroyWindow.argtypes = (w.HWND,)
 user32.DestroyWindow.restype = w.BOOL
 user32.ShowWindow.argtypes = (w.HWND, ctypes.c_int)
 user32.ShowWindow.restype = w.BOOL
+# ShowWindowAsync looks like the fix for hiding a window from a worker thread,
+# but it only POSTS the request to the window's owning thread. An automation
+# loop never pumps messages, so the window stays painted forever. Blanking the
+# content with UpdateLayeredWindow (a direct call) is the mechanism that works.
 user32.ShowWindowAsync.argtypes = (w.HWND, ctypes.c_int)
 user32.ShowWindowAsync.restype = w.BOOL
 user32.UpdateLayeredWindow.argtypes = (

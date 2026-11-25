@@ -109,7 +109,15 @@ class Overlay:
         self._size = (0, 0)
         self._hide_timer: threading.Timer | None = None
         self._font_cache: dict[int, int] = {}
+        # Two distinct states, because `ShowWindow` is a message and
+        # `UpdateLayeredWindow` is a direct call:
+        #   _shown   -- the window has been shown once (ShowWindow, main thread)
+        #   _visible -- there is currently content drawn on it
+        self._shown = False
         self._visible = False
+        # Drawing happens on the caller's thread while the expiry timer clears
+        # on its own; without this lock a clear can land mid-draw.
+        self._lock = threading.RLock()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -181,6 +189,7 @@ class Overlay:
         self._pixels = np.frombuffer(buf, dtype=np.uint8).reshape(vh, vw, 4)
 
         user32.ShowWindow(self._hwnd, SW_SHOWNOACTIVATE)
+        self._shown = True
 
     def close(self):
         """Destroy the window and release every GDI object."""
@@ -198,6 +207,7 @@ class Overlay:
             user32.DestroyWindow(self._hwnd)
         self._hwnd = self._mem_dc = self._bitmap = self._old_bitmap = None
         self._pixels = None
+        self._shown = False
         self._visible = False
 
     def __del__(self):
@@ -319,21 +329,30 @@ class Overlay:
     # -- presentation ------------------------------------------------------
 
     def present(self):
-        """Push the drawn bitmap to the compositor."""
-        self._ensure_window()
-        src = w.POINT(0, 0)
-        dst = w.POINT(self._origin[0], self._origin[1])
-        size = w.SIZE(self._size[0], self._size[1])
-        blend = BLENDFUNCTION(AC_SRC_OVER, 0, 255, AC_SRC_ALPHA)
-        ok = user32.UpdateLayeredWindow(
-            self._hwnd, None, ctypes.byref(dst), ctypes.byref(size),
-            self._mem_dc, ctypes.byref(src), 0,
-            ctypes.byref(blend), ULW_ALPHA)
-        if not ok:
-            raise OSError(f"UpdateLayeredWindow failed "
-                          f"(error {ctypes.get_last_error()})")
-        if not self._visible:
-            user32.ShowWindow(self._hwnd, SW_SHOWNOACTIVATE)
+        """Push the drawn bitmap to the compositor.
+
+        `UpdateLayeredWindow` is a direct call, not a window message, so it
+        works from any thread without a message pump -- which is what makes
+        `hide()` below safe to call from the expiry timer.
+        """
+        with self._lock:
+            self._ensure_window()
+            src = w.POINT(0, 0)
+            dst = w.POINT(self._origin[0], self._origin[1])
+            size = w.SIZE(self._size[0], self._size[1])
+            blend = BLENDFUNCTION(AC_SRC_OVER, 0, 255, AC_SRC_ALPHA)
+            ok = user32.UpdateLayeredWindow(
+                self._hwnd, None, ctypes.byref(dst), ctypes.byref(size),
+                self._mem_dc, ctypes.byref(src), 0,
+                ctypes.byref(blend), ULW_ALPHA)
+            if not ok:
+                raise OSError(f"UpdateLayeredWindow failed "
+                              f"(error {ctypes.get_last_error()})")
+            # ShowWindow IS a message, so only ever call it once, from whichever
+            # thread draws first -- never from the timer.
+            if not self._shown:
+                user32.ShowWindow(self._hwnd, SW_SHOWNOACTIVATE)
+                self._shown = True
             self._visible = True
 
     def _cancel_timer(self):
@@ -342,11 +361,32 @@ class Overlay:
             self._hide_timer = None
 
     def hide(self):
-        """Hide the overlay without destroying it."""
-        self._cancel_timer()
-        if self._hwnd:
+        """Blank the overlay. Safe from any thread, including a timer.
+
+        Deliberately does NOT call `ShowWindow(SW_HIDE)`. That posts a message
+        to the window's owning thread, and an automation loop never pumps
+        messages -- so the request sits in the queue forever and the boxes stay
+        frozen on screen. (Calling it synchronously is worse: it blocks on
+        `WM_SHOWWINDOW` and deadlocks the caller for minutes.)
+
+        Pushing an all-zero premultiplied bitmap through `UpdateLayeredWindow`
+        is a direct call, so the glass goes empty immediately from anywhere.
+        A fully transparent window is visually identical to a hidden one and
+        stays click-through either way.
+        """
+        with self._lock:
+            self._cancel_timer()
+            if not self._hwnd or self._pixels is None:
+                return
             self._pixels[:] = 0
-            user32.ShowWindowAsync(self._hwnd, SW_HIDE)
+            src = w.POINT(0, 0)
+            dst = w.POINT(self._origin[0], self._origin[1])
+            size = w.SIZE(self._size[0], self._size[1])
+            blend = BLENDFUNCTION(AC_SRC_OVER, 0, 255, AC_SRC_ALPHA)
+            user32.UpdateLayeredWindow(
+                self._hwnd, None, ctypes.byref(dst), ctypes.byref(size),
+                self._mem_dc, ctypes.byref(src), 0,
+                ctypes.byref(blend), ULW_ALPHA)
             self._visible = False
 
     def expire_in(self, seconds: float):

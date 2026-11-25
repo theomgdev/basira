@@ -68,9 +68,29 @@ Host: Windows 11 (AMD/RTX 3060 Ti, 3440x1440 @ 144 Hz, Python 3.11)
 - **Observation**: Out-of-the-box RapidOCR (`PP-OCRv6 small`, ONNX Runtime) took **186.8 ms** on a 360x140 UI region. Switching to pure `TORCH-CUDA` dropped it to **55.4 ms**, still 4x slower than expected (`det = 46.9 ms`, `rec = 7.7 ms`).
 - **Root Cause 1 (The `limit_type='min'` Upscale Trap)**: RapidOCR defaults to `Det.limit_type = 'min'` with `Det.limit_side_len = 736`. A 360x140 crop has its short side scaled to 736 px (producing an 1892x736 = 1.4 MPx tensor — a **19x pixel expansion**!) before DBNet runs. Setting `Det.limit_type = 'max'` (never upscale, only downscale large inputs) dropped DBNet from **46.9 ms to 4.5–9.6 ms** and prevented adjacent letters from blurring into a single box.
 
-## 9. Click-Through HUD Overlays: Five Physical Traps
 - **Root Cause 2 (Stage Asymmetry — CPU Det + GPU Rec Hybrid)**:
   - **DBNet (Detection)** outputs a probability map followed immediately by CPU contour extraction (`cv2.findContours` + polygon unclipping). On small/medium crops, running `PP-OCRv6_det_tiny` in **ONNX Runtime on CPU** takes **4.5 ms** — faster than GPU (**9.6 ms**) because it avoids the PCIe host-to-device-to-host roundtrip.
   - **SVTR (Recognition)** runs over a batch of $N$ cropped word boxes (`[N, 3, 48, 320]`). On CPU, batch cost scales linearly (**40.0 ms**); on **PyTorch CUDA**, the batch executes in parallel in **5.8 ms** (`tiny`) to **11.0 ms** (`small`).
   - Combining **`Det = ONNXRUNTIME` + `Rec = TORCH-CUDA`** achieved **13.1 ms p50 (10.9 ms min)** on the 360x140 test card and **23.5 ms p50 (21.3 ms min)** on a live 620x300 multilingual window (**17x faster** than default).
 - **Root Cause 3 (Single-Character DBNet Thresholds)**: DBNet is trained on multi-character text lines, so an isolated single-character button or target (e.g. a lone `'L'` or `'T'`) produces a mean box score of $0.22–0.28$ and gets discarded by the default `box_thresh = 0.5`. Setting `Det.thresh = 0.15` and `Det.box_thresh = 0.20` lets isolated single glyphs pass to SVTR, which recognizes them at $>0.98$ confidence.
+
+## 9. Click-Through HUD Overlays: Six Physical Traps
+
+Drawing boxes over the desktop is how an open-vocabulary automation becomes
+debuggable at all — without it, every diagnosis needs captured frames replayed
+offline. Six Win32 facts decide whether such an overlay works:
+
+1. **`WS_EX_TRANSPARENT` is input-load-bearing.** A layered window without it intercepts every mouse message inside its rectangle, so a debug overlay would break the automation it exists to show.
+2. **`WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` protect fullscreen state.** Taking focus minimises fullscreen-exclusive 3D games — exactly the case most worth debugging.
+3. **`UpdateLayeredWindow(ULW_ALPHA)` expects premultiplied BGRA.** Straight alpha produces bright haloes. GDI `TextOutW` also never writes the alpha channel, so glyphs drawn onto transparent glass are invisible; filling an opaque label chip first makes premultiplication an identity operation and the text comes out solid.
+4. **Hiding a layered window from a worker thread does not work through `ShowWindow`.** Synchronous `ShowWindow(SW_HIDE)` blocks on `WM_SHOWWINDOW` and deadlocked the caller for 180+ s when the owning thread had no message pump. `ShowWindowAsync` avoids the deadlock but merely posts to that same unpumped queue, so the overlay stayed painted on screen indefinitely — measured live: 10056 lime px drawn, 10056 still there 400 ms after `hide()`. Blanking the content instead (all-zero premultiplied bitmap through `UpdateLayeredWindow`, a direct call that never touches the message queue) clears the glass from any thread in **1.3 ms**. A fully transparent layered window is visually identical to a hidden one and stays click-through either way.
+5. **Assert on screen pixels, not on an internal `visible` flag.** The first version of this overlay's test suite checked its own bookkeeping and passed 4/4 while the boxes were frozen on screen in a live game. A test that reads back the pixels catches it immediately; a test that trusts the object's self-report cannot. Also measure a baseline before drawing — without one, unrelated on-screen content of the same colour is indistinguishable from the overlay's own output.
+6. **DIB section updates scale with area, not draw complexity.** Clearing a full 3440x1440 32-bpp top-down DIB, drawing boxes, labels and a crosshair, and presenting via `UpdateLayeredWindow` costs **1.45 ms p50** — safe inside a 30–60 Hz tracking loop.
+
+## 10. Watched-Region Size is a Measured Tradeoff, Not a Free Optimisation
+
+- **Observation** (3440x1440, YOLOE-26s, fixed prompt list):
+  - centred 55% crop (1892x792): grab **13.0 ms** + detect **14.5 ms** = **36.3 Hz**
+  - full screen (3440x1440): grab **24.3 ms** + detect **24.3 ms** = **20.6 Hz**
+- **Root Cause**: both halves scale with area — the DIB copy because it is a memcpy, and the detector because its letterboxed input grows with the source.
+- **Consequence**: a crop buys loop rate but makes everything outside it invisible. On an ultrawide that is a large blind region, and a target entering from the screen edge simply never exists as far as the automation is concerned. Expose the fraction as a parameter rather than hard-coding a number that silently encodes one host's aspect ratio and one task's priorities.

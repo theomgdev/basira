@@ -38,14 +38,16 @@ from basira._win32 import user32
 VK_CONTROL = 0x11
 VK_END = 0x23
 
-# Closed-loop aim tuning. Measured on a 3440x1440 de_dust2 session:
-#   gain=1.0 overshoots and visibly flickers left-right, because one frame's
-#   full correction arrives after the camera has already turned (dead time),
-#   so the next frame corrects the overshoot and the loop rings.
-#   gain~0.45 removes 45% of the remaining error per frame: the aim converges
-#   in 3-4 frames (~60-80 ms) with no ringing, which also reads as a human
-#   wrist settling rather than a snap.
-AIM_GAIN = 0.45
+# Closed-loop aim tuning.
+#   The loop corrects `gain` of the remaining screen-space error each frame, so
+#   the aim decays onto the target instead of being teleported there. Below ~0.5
+#   that decay is visible as a wrist settling; at 1.0 the correction is applied
+#   whole, which converges fastest and — with the game's own sensitivity lowered
+#   to compensate — was what felt best in live play. The ringing that full gain
+#   can cause comes from loop dead time (the correction lands after the camera
+#   has already turned), so if the aim ever flickers left-right, lower this
+#   rather than raising it.
+AIM_GAIN = 1
 DEAD_ZONE_PX = 3      # stop nudging once this close; prevents idle jitter
 
 # Trigger discipline. A real player does not hold the mouse down forever: with
@@ -88,7 +90,7 @@ PROMPTS = ["person", "soldier", "man", "police", "shield", "human", "human silue
 # and HUD furniture at the bottom of the screen) were 2.38 and 3.35 wide — and
 # both scored only 0.26-0.29 against 0.52-0.87 for real players.
 MAX_ASPECT = 1.1
-MIN_CONF = 0.05
+MIN_CONF = 0.25
 # The viewmodel occupies the bottom strip of the screen permanently; nothing
 # there is ever a target worth turning towards.
 VIEWMODEL_BAND = 0.78
@@ -121,6 +123,12 @@ EDGE_CLIP_PX = 3           # box within this many px of a region edge = clipped
 UPRIGHT_REF = 0.55         # aspect treated as "fully upright", no penalty
 UPRIGHT_WEIGHT = 7.0       # multiplier applied per unit of aspect beyond that
 UPRIGHT_EXP = 2.0          # superlinear: collapsing costs far more than leaning
+
+# Fraction of the screen watched each frame. 1.0 = the whole screen, which is
+# what live play settled on: a crop is faster per frame but blind to anything
+# outside it, and on an ultrawide that blind band is where flankers appear.
+# See center_region() for the measured cost of each choice.
+REGION_FRACTION = 1
 
 
 def plausible_target(d, reg: Region) -> bool:
@@ -179,13 +187,23 @@ def key_down(vk: int) -> bool:
     return bool(user32.GetAsyncKeyState(vk) & 0x8000)
 
 
-def center_region(fraction: float = 0.55) -> Region:
-    """A centred box covering `fraction` of the screen.
+def center_region(fraction: float = REGION_FRACTION) -> Region:
+    """A centred box covering `fraction` of the screen, or all of it at 1.0.
 
-    Reading a 3440x1440 screen costs 29-34 ms, which would halve the loop rate;
-    a centred crop costs ~7 ms and is where the crosshair-relevant targets are.
+    This crop is a latency tradeoff, measured on this 3440x1440 host:
+
+        fraction 0.55 (1892x792)  -> grab 13.0 ms + detect 14.5 ms = 36.3 Hz
+        fraction 1.00 (3440x1440) -> grab 24.3 ms + detect 24.3 ms = 20.6 Hz
+
+    Both halves scale with area: the DIB copy and YOLOE's letterbox both grow,
+    so full screen costs a little under half the loop rate. It is a real cost
+    but not a prohibitive one -- enemies entering from the far edges of an
+    ultrawide are invisible to a crop, and on an ultrawide that is a lot of
+    screen to be blind to. Hence tunable rather than fixed.
     """
     sw, sh = auto.screen.size
+    if fraction >= 1.0:
+        return Region(0, 0, sw, sh)
     w, h = int(sw * fraction), int(sh * fraction)
     return Region((sw - w) // 2, (sh - h) // 2, w, h)
 
@@ -242,13 +260,13 @@ def probe():
 
 
 def aim(gain: float = AIM_GAIN, fire_mode: str = DEFAULT_FIRE_MODE,
-        show_overlay: bool = False):
+        show_overlay: bool = False, fraction: float = REGION_FRACTION):
     print("=" * 78)
     print("AIM: hold CTRL to lock on and fire. Press END to quit.")
     print("=" * 78)
 
     burst_ms, pause_ms = FIRE_MODES[fire_mode]
-    reg = center_region()
+    reg = center_region(fraction)
     cx, cy = reg.x + reg.width // 2, reg.y + reg.height // 2
     print(f"   watching {reg.width}x{reg.height} around ({cx}, {cy})")
     print(f"   gain={gain}  dead zone={DEAD_ZONE_PX}px  "
@@ -407,20 +425,28 @@ if __name__ == "__main__":
     elif mode == "aim":
         g = AIM_GAIN
         fm = DEFAULT_FIRE_MODE
+        frac = REGION_FRACTION
         overlay_flag = False
         for a in sys.argv[2:]:
             if a in ("--overlay", "-o", "overlay"):
                 overlay_flag = True
+            elif a in ("full", "fullscreen", "--full"):
+                frac = 1.0
+            elif a.startswith("region="):
+                frac = float(a.split("=", 1)[1])
+            elif a.startswith("gain="):
+                g = float(a.split("=", 1)[1])
             elif a in FIRE_MODES:
                 fm = a
             else:
                 try:
                     g = float(a)
                 except ValueError:
-                    print(f"unknown argument {a!r}; "
-                          f"fire modes: {', '.join(FIRE_MODES)}, flags: --overlay")
+                    print(f"unknown argument {a!r}; fire modes: "
+                          f"{', '.join(FIRE_MODES)}; flags: --overlay, full, "
+                          f"region=<0-1>, gain=<n>")
                     sys.exit(2)
-        aim(gain=g, fire_mode=fm, show_overlay=overlay_flag)
+        aim(gain=g, fire_mode=fm, show_overlay=overlay_flag, fraction=frac)
     else:
         print(__doc__)
         sys.exit(2)

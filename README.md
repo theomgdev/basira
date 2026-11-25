@@ -164,7 +164,7 @@ auto.flash(auto.look(), seconds=1.5)
 
 - **Zero input interference:** `WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` ensures the overlay never eats a click or drops a game out of fullscreen.
 - **Sub-2ms frame latency:** Premultiplied DIB section update (`1.45 ms p50` on 3440×1440), negligible overhead in 30–60 Hz automation loops.
-- **Non-blocking expiration:** `seconds=t` schedules auto-hide on an asynchronous worker without stalling your automation logic.
+- **Thread-safe clearing:** `hide()` blanks the glass through `UpdateLayeredWindow`, a direct call rather than a window message — so it works from an expiry timer or any worker thread even though an automation loop never pumps a message queue.
 
 ---
 
